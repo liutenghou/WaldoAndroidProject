@@ -1,0 +1,362 @@
+package ca.ubc.cpsc210.waldo.waldowebservice;
+
+import java.io.BufferedReader;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLConnection;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Set;
+import java.util.StringTokenizer;
+
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.json.JSONTokener;
+
+import android.annotation.SuppressLint;
+import ca.ubc.cpsc210.waldo.exceptions.IllegalBusStopException;
+import ca.ubc.cpsc210.waldo.exceptions.WaldoException;
+import ca.ubc.cpsc210.waldo.model.BusRoute;
+import ca.ubc.cpsc210.waldo.model.BusStop;
+import ca.ubc.cpsc210.waldo.model.Waldo;
+import ca.ubc.cpsc210.waldo.translink.TranslinkService;
+import ca.ubc.cpsc210.waldo.util.LatLon;
+
+public class WaldoService{
+
+	private final static String WALDO_WEB_SERVICE_URL = "http://kramer.nss.cs.ubc.ca:8080/";
+	
+	//create list of waldos
+	List<Waldo> waldosList;
+	
+	String translinkKey;
+	
+	//web data retrieval
+	/**
+	 * Constructor
+	 */
+	public WaldoService() {
+		//instantiate waldosList
+		waldosList = new LinkedList<Waldo>();
+		
+		//System.out.println("************Inside WaldoService");
+		translinkKey = "";
+		
+	}
+
+	/**
+	 * Initialize a session with the Waldo web service. The session can time out
+	 * even while the app is active...
+	 * 
+	 * @param nameToUse
+	 *            The name to go register, can be null if you want Waldo to
+	 *            generate a name
+	 * @return The name that Waldo gave you
+	 */
+	public String initSession(String nameToUse) {
+		//3. Explain the code for initializing a session to the Waldo web service.
+		System.out.println("## initSession , nameToUse: " + nameToUse);
+		//format the string so that it will also contain the nameToUse
+		StringBuilder urlBuilder = new StringBuilder(WALDO_WEB_SERVICE_URL);
+		
+		if(nameToUse == null || nameToUse.isEmpty()){
+			urlBuilder.append("initsession/");
+			//System.out.println("##initSession url without name: "+ urlBuilder);
+			
+		}else{
+			
+			urlBuilder.append("initsession/" + nameToUse);
+			//System.out.println("##initSession url with name: "+ urlBuilder);
+		}
+
+		String s = "";
+		String nameFromMakeJSONQuery = "";
+		try{
+			s = makeJSONQuery(urlBuilder);
+			s.trim();
+			//System.out.println("## initSession: json string: " + s);
+			
+			//for the key
+			parseFromMakeJSONQuery(s);
+			//System.out.println("@@ initSession: parseNameFromMakeJSONQuery(s): " + parseNameFromMakeJSONQuery(s));
+			nameFromMakeJSONQuery = parseNameFromMakeJSONQuery(s);
+			
+			if(nameFromMakeJSONQuery.isEmpty()){
+				throw new WaldoException("return name is empty");
+				
+			}
+		
+		} catch (Exception e) {
+			System.out.println("initSession: Error parsing JSON");
+			e.printStackTrace();
+		}
+	
+		//System.out.println("## In init session: " + waldoName);	
+		
+		//this shouldn't execute if a return is in the try block, but debuggin still goes through here, why?
+		if(!nameFromMakeJSONQuery.isEmpty()){
+			return nameFromMakeJSONQuery.trim();
+		}else{
+			
+			throw new WaldoException("Returning null from initSession");
+			
+		}
+		
+		//should there be a check for this? Don't seem to need it, since from translink service
+		//a letter-only, min 4 characters long and max 10 characters long, string
+		
+	}
+	
+	//copied from TranslinkService, private inner method
+	/**
+	 * parses a url, returns json object(s)
+	 * 
+	 * @param urlBuilder
+	 * 			which is the url address we want to query.
+	 * @return json object(s)
+	 */
+	private String makeJSONQuery(StringBuilder urlBuilder) {
+		
+		try {
+			URL url = new URL(urlBuilder.toString());
+			HttpURLConnection client = (HttpURLConnection) url.openConnection();
+			client.setRequestProperty("accept", "application/json");
+			InputStream in = client.getInputStream();
+			BufferedReader br = new BufferedReader(new InputStreamReader(in));
+			String returnString = br.readLine(); //returnString gives us the data we want
+			
+			client.disconnect();
+			return returnString;
+		} catch (Exception e) {
+			throw new WaldoException("Unable to make JSON query: " + urlBuilder.toString());
+		}
+	}
+	/**
+	 * uses the json string, gets specifically the name
+	 * 
+	 * @param s. JSON object
+	 * @return String name
+	 */
+	private String parseNameFromMakeJSONQuery(String s){
+		System.out.println("## parseNameFromMakeJSONQuery.s: " + s);
+		
+		try{
+			JSONObject obj = new JSONObject(s);
+			
+			if(!obj.getString("Name").isEmpty()){
+				System.out.println("##parseNameFromMakeJSONQuery :" + obj.getString("Name"));				
+				return obj.getString("Name").trim();
+			}
+		}catch(JSONException e){
+			System.out.println("JSONException in parseNameFromMakeJSONQuery");
+		}
+		
+		//return default
+		return null;	
+	}
+
+	/**
+	 * parses all the data from the waldo with name request. Set the key.
+	 * Error message if ErrorMessage Obj inside JSON
+	 * 
+	 * @param s. This string is the JSON object of waldo string
+	 * 
+	 */	
+	private void parseFromMakeJSONQuery(String s){
+			try {
+			JSONObject obj = new JSONObject(s);
+			
+			//throws an exception if the object contains an error
+			if(obj.has("ErrorMessage")){
+				System.out.println("Error in query: " + obj.getString("ErrorMessage"));
+				throw new WaldoException(obj.getString("ErrorMessage"));
+			}
+			
+			if(obj.has("Key")){
+				translinkKey = obj.getString("Key").trim();
+
+				//System.out.println("## parseFromMakeJSONQuery, translinkKey: " + translinkKey);
+			}
+			
+			
+		} catch (JSONException e) {
+			// Let the developer know but just return whatever is in stopsFound. Probably there was an
+			// error in the JSON returned.
+			System.out.println("JSONException in parseFromMakeJSONQuery");
+			e.printStackTrace();
+		}
+		
+	}
+	
+	/**
+	 * Get waldos from the Waldo web service.
+	 * 
+	 * @param numberToGenerate
+	 *            The number of Waldos to try to retrieve
+	 * @return Waldo objects based on information returned from the Waldo web
+	 *         service
+	 */
+	public List<Waldo> getRandomWaldos(int numberToGenerate) {
+		//4. Explain the code for retrieving Waldos from the Waldo web service.
+		//format the string so that it will also contain the nameToUse
+		List<Waldo> randomWaldos = new LinkedList<Waldo>();
+		
+		//System.out.println("#####inside getRandomWaldos");
+		StringBuilder urlBuilder;
+		//System.out.println("@Number to generate: "+ numberToGenerate);
+		if ((!translinkKey.isEmpty()) && (numberToGenerate > 0)){
+
+			
+			urlBuilder = new StringBuilder(WALDO_WEB_SERVICE_URL);
+			
+			//can put all this code in a helper function so if statement is less obvious
+			urlBuilder.append("getwaldos/" + translinkKey + "/" + numberToGenerate);
+			//System.out.println("##getRandomWaldos url: " + urlBuilder);
+			
+			String s = makeJSONQuery(urlBuilder);
+			System.out.println("ubc s = " + s);
+			
+			try {
+
+				JSONArray jray = (JSONArray) new JSONTokener(s).nextValue();
+				//JSONArray jray = new JSONArray(s);
+				//System.out.println("## getRandomWaldos: " + jray);
+				if (jray != null) {
+					for (int i = 0; i < jray.length(); i++) {
+						
+						// Retrieve the stop number, name, lat and lon
+						JSONObject waldo1 = jray.getJSONObject(i);
+						String waldo1Name = waldo1.getString("Name").trim();
+						//System.out.println("## getRandomWaldos.waldo1Name: " + waldo1Name);
+						
+						JSONObject waldo1Location = waldo1.getJSONObject("Loc");
+						double waldo1Lat = waldo1Location.getDouble("Lat");
+						double waldo1Long = waldo1Location.getDouble("Long");
+						long waldo1Tstamp = waldo1Location.getLong("Tstamp");
+						
+						//System.out.println("## getRandomWaldos.waldo lat: " + waldo1Lat);
+						//System.out.println("## getRandomWaldos.waldo long: " + waldo1Long);
+						//System.out.println("## getRandomWaldos.waldo tstam: " + waldo1Tstamp);
+						
+						//create the Latlong
+						LatLon waldo1LatLon = new LatLon(waldo1Lat, waldo1Long);
+						
+						
+						Date waldo1Date = new Date(waldo1Tstamp*1000);
+						
+						//System.out.println("## getRandomWaldos.waldo LatLong: " + waldo1LatLon);
+						//System.out.println("## getRandomWaldos.waldo waldo1Date: " + waldo1Date);
+						
+						Waldo waldo1Object = new Waldo(waldo1Name, waldo1Date, waldo1LatLon);
+						randomWaldos.add(waldo1Object);
+						
+						//System.out.println("## getRandomWaldos.randomWaldos: " + randomWaldos);
+						
+
+					}
+				}
+				
+			} catch (JSONException e) {
+				e.printStackTrace();
+			}
+			
+		}
+		waldosList = randomWaldos;
+		return randomWaldos;
+	}
+	
+	
+
+	/**
+	 * Return the current list of Waldos that have been retrieved
+	 * 
+	 * @return The current Waldos
+	 */
+	public List<Waldo> getWaldos() {
+		System.out.println("## inside getWaldos()");
+		
+		return waldosList;
+	}
+
+	/**
+	 * Retrieve messages available for the user from the Waldo web service
+	 * 
+	 * @return A list of messages
+	 */
+	public List<String> getMessages() {
+		//11. Explain the code for retrieving messages for a user from the Waldo web service.
+		//System.out.println("## inside getMessages ##");
+		
+		List<String> messagesList = new LinkedList<String>();
+		/*
+		 * example
+		 * http://kramer.nss.cs.ubc.ca:8080/getmsgs/JEzzWjPH/
+		 * 
+		*/
+		
+		//make http query for messages
+		StringBuilder urlBuilder;
+		urlBuilder = new StringBuilder(WALDO_WEB_SERVICE_URL);
+		
+		//can put all this code in a helper function so if statement is less obvious
+		
+		if(!translinkKey.isEmpty()){
+			urlBuilder.append("getmsgs/" + translinkKey + "/");
+		}else{
+			//no key, abort
+			return null;
+		}
+				
+		//System.out.println("## getMessages url: " + urlBuilder);
+		
+		String s = makeJSONQuery(urlBuilder);
+		
+		
+		//parse s
+		//one big messages object
+		
+		if(!s.isEmpty()){
+			//System.out.println("## getMessages() JSON RESULT = " + s);
+			
+			try {
+				JSONObject messageObject = new JSONObject(s);
+				
+				JSONArray messagesArray = messageObject.getJSONArray("Messages");
+				
+				System.out.println("## getMessages().messagesArray: " + messagesArray);
+				
+				if(messagesArray != null){
+					for(int i = 0; i < messagesArray.length(); i++){
+						JSONObject message1 = messagesArray.getJSONObject(i);
+						
+						messagesList.add(message1.getString("Message"));
+					}
+				}
+				
+			} catch (JSONException e) {
+				e.printStackTrace();
+			}
+			
+			
+		}
+		
+		return messagesList;
+	}
+
+	
+}
